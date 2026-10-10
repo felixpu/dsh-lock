@@ -12,7 +12,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-lock
+dsh plugin --profile web add github:felixpu/dsh-lock
 ```
 
 安装后重启宿主进程。
