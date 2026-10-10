@@ -335,11 +335,12 @@ window.__ModuleLoader__.load({
       var error = errState[0];
       var setError = errState[1];
       var inputRef = React.useRef(null);
-      // 是否明文显示密码。一个状态同时控制两个输入框（设置模式下
-      // 密码与确认框同步切换），避免只露一个造成误判。
-      var showPwState = React.useState(false);
-      var showPw = showPwState[0];
-      var setShowPw = showPwState[1];
+      // 两个密码框各有**独立**的显示/隐藏状态。
+      // ⚠️ 曾用一个状态同时控制两者（想着「同步切换更好对照」），
+      //    但实际体验是错的：用户往往只想核对其中一个框，
+      //    联动会让另一个框也被动变化。故分开。
+      var pwVisibleState = React.useState(false);
+      var repeatVisibleState = React.useState(false);
 
       var setupMode = !snapshot.configured;
 
@@ -356,13 +357,19 @@ window.__ModuleLoader__.load({
        * 为什么要这个按钮：密码默认打码，用户看不到自己输了什么，
        * 设置新密码时极易输错却无法自查（实测反馈）。
        *
+       * ⚠️ 显示状态由调用方按字段传入（visible / onToggle），**两个框互相独立**。
+       *    曾用一个共享状态联动两者，但用户体验并不需要联动 ——
+       *    通常只想核对其中一个框，联动会连带把另一个也改掉。
+       *
        * 无障碍：按钮带 aria-label 与 aria-pressed，图标 aria-hidden，
        * 键盘可 Tab 到（原生 button）。
        */
       function passwordField(opts) {
+        var visible = opts.visible;
+
         var inputProps = {
           className: 'dlk-input',
-          type: showPw ? 'text' : 'password',
+          type: visible ? 'text' : 'password',
           autoComplete: opts.autoComplete,
           placeholder: opts.placeholder,
           value: opts.value,
@@ -371,6 +378,7 @@ window.__ModuleLoader__.load({
             opts.onChange(e.target.value);
           },
         };
+        // 主密码框需要 ref 供自动聚焦；确认框不需要。
         if (opts.inputRef) inputProps.ref = opts.inputRef;
 
         var eye = h(
@@ -384,7 +392,7 @@ window.__ModuleLoader__.load({
             strokeWidth: 1.8,
             'aria-hidden': 'true',
           },
-          showPw
+          visible
             ? // 睁眼：可见中（点击可隐藏）
               [
                 h('path', { key: 'a', d: 'M1.8 12S5.4 5.5 12 5.5 22.2 12 22.2 12 18.6 18.5 12 18.5 1.8 12 1.8 12Z' }),
@@ -410,16 +418,23 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dlk-eye',
               disabled: busy,
-              'aria-label': showPw ? LABELS.hidePassword : LABELS.showPassword,
-              'aria-pressed': showPw ? 'true' : 'false',
-              title: showPw ? LABELS.hidePassword : LABELS.showPassword,
-              // 阻止提交：这是表单内的按钮，必须显式声明 type=button 之外
-              // 再兜一层，避免某些浏览器把它当 submit。
+              'aria-label': visible ? LABELS.hidePassword : LABELS.showPassword,
+              'aria-pressed': visible ? 'true' : 'false',
+              title: visible ? LABELS.hidePassword : LABELS.showPassword,
+              // 阻止提交：这是表单内的按钮，显式 type=button 之外再兜一层，
+              // 避免某些浏览器把它当 submit。
               onClick: function (e) {
                 if (e && e.preventDefault) e.preventDefault();
-                setShowPw(!showPw);
-                // 切换后把焦点还给输入框，便于继续输入。
-                if (inputRef.current && inputRef.current.focus) inputRef.current.focus();
+                opts.onToggle();
+                // 焦点还给**本字段**的输入框（不是主密码框）—— 两个框独立后，
+                // 若统一聚焦主框，在确认框上切换会让焦点跳走。
+                // 用事件目标定位兄弟节点，避免在 passwordField 里调 useRef：
+                // 该函数被**条件性调用**（设密码时 2 次、解锁时 1 次），
+                // 内含 hook 会违反 Hooks 规则（hooks 数量须逐次渲染一致）。
+                var btn = e && e.currentTarget;
+                var box = btn && btn.parentNode;
+                var el = box && box.querySelector('input');
+                if (el && el.focus) el.focus();
               },
             },
             eye,
@@ -541,6 +556,10 @@ window.__ModuleLoader__.load({
           placeholder: setupMode ? LABELS.placeholderNew : LABELS.placeholder,
           value: password,
           onChange: setPassword,
+          visible: pwVisibleState[0],
+          onToggle: function () {
+            pwVisibleState[1](!pwVisibleState[0]);
+          },
         }),
       ];
 
@@ -552,6 +571,10 @@ window.__ModuleLoader__.load({
             placeholder: LABELS.placeholderRepeat,
             value: repeat,
             onChange: setRepeat,
+            visible: repeatVisibleState[0],
+            onToggle: function () {
+              repeatVisibleState[1](!repeatVisibleState[0]);
+            },
           }),
         );
       }
