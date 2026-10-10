@@ -183,7 +183,10 @@ window.__ModuleLoader__.load({
       ready: false, // 是否已从宿主取到状态
       configured: false, // 是否已设密码
       locked: true, // 是否需要显示遮罩
-      skipped: false, // 本次会话是否选择了「暂不设置」
+      // 用户是否已明确「暂不设置」——来自宿主持久化，非会话内临时状态。
+      setupDismissed: false,
+      // 本次会话是否从侧栏按钮手动拉起了引导（不落盘，刷新即失效）。
+      guideForced: false,
       unreachable: 0, // 0=正常；-1=网络不可达；其他=宿主 HTTP 状态码
     };
 
@@ -237,13 +240,19 @@ window.__ModuleLoader__.load({
         }
         var data = await res.json();
         var configured = !!data.configured;
-        // 未设密码时显示「设置密码」引导（bootstrap），用户可跳过；
+        // 未设密码时显示「设置密码」引导（bootstrap）；但用户点过「暂不设置」
+        // 就不再自动弹出 —— 该标记持久化在**宿主侧**，刷新页面/换浏览器均生效。
         // 已设密码未解锁时显示解锁框。
         setState({
           ready: true,
           unreachable: 0,
           configured: configured,
-          locked: configured ? !data.unlocked : !state.skipped,
+          setupDismissed: !!data.setupDismissed,
+          // 未设密码：仅在「未跳过」或「本次手动拉起」时显示引导；
+          // 已设密码：未解锁就显示解锁框。
+          locked: configured
+            ? !data.unlocked
+            : !data.setupDismissed || state.guideForced,
         });
         return data;
       } catch (err) {
@@ -487,7 +496,13 @@ window.__ModuleLoader__.load({
               className: 'dlk-btn dlk-btn-block',
               disabled: busy,
               onClick: function () {
-                setState({ skipped: true, locked: false });
+                // 先乐观隐藏引导（体感即时），同时把意图落盘到宿主 ——
+                // 否则刷新页面会再次弹出（用户已明确拒绝，属骚扰）。
+                // 一并清 guideForced，保证侧栏按钮下次仍能重新拉起。
+                setState({ setupDismissed: true, guideForced: false, locked: false });
+                request('/dismiss-setup', { method: 'POST' }).catch(function () {
+                  /* 落盘失败：本次已隐藏，下次刷新可能再弹一次，可接受 */
+                });
               },
             },
             LABELS.skip,
@@ -567,9 +582,11 @@ window.__ModuleLoader__.load({
             title: label,
             'aria-label': label,
             onClick: function () {
-              // 未设密码 → 重新打开设置引导；已设密码 → 立即锁定。
+              // 未设密码 → 本次会话重新打开设置引导；已设密码 → 立即锁定。
               if (snapshot.configured) lockNow();
-              else setState({ skipped: false, locked: true });
+              // ⚠️ 只临时显示引导，**不清除**宿主持久化的 setupDismissed ——
+              // 否则「刷新后不再打扰」的承诺会被这一次点击破坏。
+              else setState({ guideForced: true, locked: true });
             },
           },
           children,
