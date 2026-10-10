@@ -425,16 +425,47 @@ window.__ModuleLoader__.load({
               // 避免某些浏览器把它当 submit。
               onClick: function (e) {
                 if (e && e.preventDefault) e.preventDefault();
-                opts.onToggle();
-                // 焦点还给**本字段**的输入框（不是主密码框）—— 两个框独立后，
-                // 若统一聚焦主框，在确认框上切换会让焦点跳走。
-                // 用事件目标定位兄弟节点，避免在 passwordField 里调 useRef：
-                // 该函数被**条件性调用**（设密码时 2 次、解锁时 1 次），
+                // 用事件目标定位本字段的输入框，避免在 passwordField 里调
+                // useRef —— 该函数被**条件性调用**（设密码时 2 次、解锁时 1 次），
                 // 内含 hook 会违反 Hooks 规则（hooks 数量须逐次渲染一致）。
                 var btn = e && e.currentTarget;
                 var box = btn && btn.parentNode;
                 var el = box && box.querySelector('input');
-                if (el && el.focus) el.focus();
+
+                // 记录切换前的光标位置，切换后恢复。
+                // 为什么需要：改变 input 的 type 会让浏览器**重置选区**
+                // （selectionStart/End 归零），光标跳到最前面，
+                // 用户继续输入时字符会插到开头（实测反馈）。
+                var caret = null;
+                if (el && typeof el.selectionStart === 'number') {
+                  caret = { start: el.selectionStart, end: el.selectionEnd };
+                }
+
+                opts.onToggle();
+
+                if (!el) return;
+                // type 切换要等 React 重渲染落到 DOM，故延后一拍再设光标。
+                var restore = function () {
+                  try {
+                    el.focus();
+                    if (caret === null) return;
+                    var len = el.value ? el.value.length : 0;
+                    // 越界保护：值可能在此期间变化。
+                    var s = Math.min(caret.start, len);
+                    var t = Math.min(caret.end, len);
+                    el.setSelectionRange(s, t);
+                  } catch (err) {
+                    /* 个别浏览器/输入法下 setSelectionRange 可能抛错：
+                       此时仅失去光标保持，不影响显示切换本身 */
+                  }
+                };
+                if (typeof requestAnimationFrame === 'function') {
+                  requestAnimationFrame(function () {
+                    requestAnimationFrame(restore);
+                  });
+                } else {
+                  setTimeout(restore, 0);
+                }
               },
             },
             eye,
