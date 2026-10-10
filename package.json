@@ -1,0 +1,54 @@
+{
+  "name": "dsh-lock",
+  "version": "0.1.2",
+  "description": "密码门禁：打开 DSH 时先显示密码界面，解锁后才能使用；支持手动锁定与自动锁定，密码以 scrypt 单向哈希存储。",
+  "icon": "icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felixpu/dsh-lock.git"
+  },
+  "homepage": "https://github.com/felixpu/dsh-lock#readme",
+  "bugs": {
+    "url": "https://github.com/felixpu/dsh-lock/issues"
+  },
+  "author": "felixpu",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-shortcuts"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "lock",
+    "password",
+    "security"
+  ],
+  "license": "MIT"
+}
