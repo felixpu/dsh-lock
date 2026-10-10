@@ -45,6 +45,16 @@ window.__ModuleLoader__.load({
       '.dlk-input{font:inherit;font-size:14px;width:100%;padding:10px 12px;border-radius:10px;box-sizing:border-box;',
       'border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
       '.dlk-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary)}',
+      // ---- 密码显示切换（输入框内的眼睛按钮）----
+      // 容器负责定位，输入框右侧留出图标位置，避免文字被图标压住。
+      '.dlk-pw{position:relative;display:flex;align-items:center;width:100%}',
+      '.dlk-pw .dlk-input{padding-right:40px}',
+      '.dlk-eye{position:absolute;right:6px;display:inline-flex;align-items:center;justify-content:center;',
+      'width:28px;height:28px;padding:0;border:none;border-radius:8px;background:transparent;cursor:pointer;',
+      'color:var(--dsw-alias-label-secondary)}',
+      '.dlk-eye:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}',
+      '.dlk-eye:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+      '.dlk-eye:disabled{opacity:.5;cursor:default}',
       '.dlk-btn{font:inherit;font-size:13px;font-weight:500;padding:10px 14px;border-radius:10px;cursor:pointer;',
       'border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
       '.dlk-btn-primary{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base)}',
@@ -94,6 +104,8 @@ window.__ModuleLoader__.load({
       placeholder: '密码',
       placeholderNew: '设置密码（至少 4 位）',
       placeholderRepeat: '再次输入密码',
+      showPassword: '显示密码',
+      hidePassword: '隐藏密码',
       unlock: '解锁',
       setup: '设置并继续',
       skip: '暂不设置',
@@ -187,6 +199,8 @@ window.__ModuleLoader__.load({
       setupDismissed: false,
       // 本次会话是否从侧栏按钮手动拉起了引导（不落盘，刷新即失效）。
       guideForced: false,
+      // 凭据文件相对路径（$DSH_HOME 之下），由宿主下发，用于提示文案。
+      credentialsPath: '',
       unreachable: 0, // 0=正常；-1=网络不可达；其他=宿主 HTTP 状态码
     };
 
@@ -248,6 +262,7 @@ window.__ModuleLoader__.load({
           unreachable: 0,
           configured: configured,
           setupDismissed: !!data.setupDismissed,
+          credentialsPath: typeof data.credentialsPath === 'string' ? data.credentialsPath : '',
           // 未设密码：仅在「未跳过」或「本次手动拉起」时显示引导；
           // 已设密码：未解锁就显示解锁框。
           locked: configured
@@ -320,6 +335,11 @@ window.__ModuleLoader__.load({
       var error = errState[0];
       var setError = errState[1];
       var inputRef = React.useRef(null);
+      // 是否明文显示密码。一个状态同时控制两个输入框（设置模式下
+      // 密码与确认框同步切换），避免只露一个造成误判。
+      var showPwState = React.useState(false);
+      var showPw = showPwState[0];
+      var setShowPw = showPwState[1];
 
       var setupMode = !snapshot.configured;
 
@@ -330,11 +350,87 @@ window.__ModuleLoader__.load({
         [setupMode],
       );
 
+      /**
+       * 渲染一个密码输入框：输入框 + 右侧「显示/隐藏」眼睛按钮。
+       *
+       * 为什么要这个按钮：密码默认打码，用户看不到自己输了什么，
+       * 设置新密码时极易输错却无法自查（实测反馈）。
+       *
+       * 无障碍：按钮带 aria-label 与 aria-pressed，图标 aria-hidden，
+       * 键盘可 Tab 到（原生 button）。
+       */
+      function passwordField(opts) {
+        var inputProps = {
+          className: 'dlk-input',
+          type: showPw ? 'text' : 'password',
+          autoComplete: opts.autoComplete,
+          placeholder: opts.placeholder,
+          value: opts.value,
+          disabled: busy,
+          onChange: function (e) {
+            opts.onChange(e.target.value);
+          },
+        };
+        if (opts.inputRef) inputProps.ref = opts.inputRef;
+
+        var eye = h(
+          'svg',
+          {
+            viewBox: '0 0 24 24',
+            width: 16,
+            height: 16,
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: 1.8,
+            'aria-hidden': 'true',
+          },
+          showPw
+            ? // 睁眼：可见中（点击可隐藏）
+              [
+                h('path', { key: 'a', d: 'M1.8 12S5.4 5.5 12 5.5 22.2 12 22.2 12 18.6 18.5 12 18.5 1.8 12 1.8 12Z' }),
+                h('circle', { key: 'b', cx: 12, cy: 12, r: 3.2 }),
+              ]
+            : // 闭眼带斜线：已隐藏（点击可显示）
+              [
+                h('path', { key: 'a', d: 'M3 3l18 18' }),
+                h('path', {
+                  key: 'b',
+                  d: 'M10.6 6.1A9.8 9.8 0 0 1 12 6c6.6 0 10.2 6 10.2 6a17 17 0 0 1-3.3 3.9M6.5 7.6A16.6 16.6 0 0 0 1.8 12S5.4 18 12 18c1.2 0 2.3-.2 3.3-.5',
+                }),
+              ],
+        );
+
+        return h(
+          'div',
+          { key: opts.key, className: 'dlk-pw' },
+          h('input', inputProps),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlk-eye',
+              disabled: busy,
+              'aria-label': showPw ? LABELS.hidePassword : LABELS.showPassword,
+              'aria-pressed': showPw ? 'true' : 'false',
+              title: showPw ? LABELS.hidePassword : LABELS.showPassword,
+              // 阻止提交：这是表单内的按钮，必须显式声明 type=button 之外
+              // 再兜一层，避免某些浏览器把它当 submit。
+              onClick: function (e) {
+                if (e && e.preventDefault) e.preventDefault();
+                setShowPw(!showPw);
+                // 切换后把焦点还给输入框，便于继续输入。
+                if (inputRef.current && inputRef.current.focus) inputRef.current.focus();
+              },
+            },
+            eye,
+          ),
+        );
+      }
+
       async function submit(event) {
         if (event && event.preventDefault) event.preventDefault();
         if (busy) return;
         setError('');
-
         if (setupMode) {
           if (password.length < 4) {
             setError(LABELS.tooShort);
@@ -438,34 +534,24 @@ window.__ModuleLoader__.load({
         ),
         h('h2', { key: 'title', className: 'dlk-title' }, setupMode ? LABELS.setupTitle : LABELS.title),
         h('p', { key: 'sub', className: 'dlk-sub' }, setupMode ? LABELS.setupSub : LABELS.sub),
-        h('input', {
+        passwordField({
           key: 'pwd',
-          ref: inputRef,
-          className: 'dlk-input',
-          type: 'password',
+          inputRef: inputRef,
           autoComplete: setupMode ? 'new-password' : 'current-password',
           placeholder: setupMode ? LABELS.placeholderNew : LABELS.placeholder,
           value: password,
-          disabled: busy,
-          onChange: function (e) {
-            setPassword(e.target.value);
-          },
+          onChange: setPassword,
         }),
       ];
 
       if (setupMode) {
         children.push(
-          h('input', {
+          passwordField({
             key: 'repeat',
-            className: 'dlk-input',
-            type: 'password',
             autoComplete: 'new-password',
             placeholder: LABELS.placeholderRepeat,
             value: repeat,
-            disabled: busy,
-            onChange: function (e) {
-              setRepeat(e.target.value);
-            },
+            onChange: setRepeat,
           }),
         );
       }
@@ -512,7 +598,12 @@ window.__ModuleLoader__.load({
           h(
             'p',
             { key: 'hint', className: 'dlk-hint' },
-            '密码经 scrypt 单向哈希存储，忘记密码可删除 ~/.dsh/dsh-lock/credentials.json 后重启 DSH。',
+            // 路径由宿主经 /status 下发，不在此写死 ——
+            // 目录改过一次（dsh-lock → .dsh-lock），写死会导致文案指向
+            // 不存在的文件（实测踩到）。缺省回退到已知路径。
+            '密码经 scrypt 单向哈希存储，忘记密码可删除 $DSH_HOME/' +
+              (snapshot.credentialsPath || '.dsh-lock/credentials.json') +
+              ' 后重启 DSH。',
           ),
         );
       }
