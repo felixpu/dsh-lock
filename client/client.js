@@ -138,6 +138,46 @@ window.__ModuleLoader__.load({
       : KEYCAP_PRIMARY + '+' + KEYCAP_SHIFT + '+' + KEYCAP_LAST;
 
     // ---------------------------------------------------------------------
+    // 插件 ctx 的模块级引用（apply 时赋值）。
+    // 组件（Veil 等）拿不到 ctx，但解锁成功时需要 ctx.emit 通知平台重拉数据。
+    var ctxRef = null;
+
+    /**
+     * 通知平台「连接已就绪，请重新拉取数据」。
+     *
+     * 为什么必须做（实测确诊的真 bug）：
+     *   数据闸在锁定态会把平台的全部初始化请求拦成 401
+     *   （/api/session/list、/api/settings/describe、/api/credentials/describe …）。
+     *   平台把这些请求记为「已完成（失败）」，**解锁后不会自动重试**。
+     *   结果：解锁进入界面后工作区/会话数据始终为空，必须手动刷新页面才恢复。
+     *
+     * 修复手段：广播平台的 `connection/reset` 事件 —— 这正是 dsh-api-gateway
+     *   在「连接建立/重连成功」时发出的信号，各 UI 模块（workspace、skill、
+     *   model-selection 等）都监听它并重新初始化数据。
+     *   解锁后服务端已放行，语义与「连接刚就绪」完全一致。
+     *
+     * 契约来源：官方文档 develop/framework/events —— `ctx.emit(name, payload)`
+     *   为标准触发 API；事件本身见 client/Event 目录 connection/reset。
+     *
+     * 容错：整个调用包 try/catch，且延迟一拍执行（等遮罩卸载、状态落定），
+     *   任何失败只影响「要不要手动刷新」，绝不影响解锁本身。
+     */
+    function notifyPlatformReady() {
+      try {
+        if (!ctxRef || typeof ctxRef.emit !== 'function') return;
+        // 延迟到当前渲染与状态提交之后再广播，避免与遮罩卸载争抢同一帧。
+        setTimeout(function () {
+          try {
+            ctxRef.emit('connection/reset');
+          } catch (err) {
+            /* 广播失败：最坏情况是需要用户手动刷新 */
+          }
+        }, 0);
+      } catch (err) {
+        /* 同上：不影响解锁结果 */
+      }
+    }
+
     var listeners = new Set();
     var state = {
       ready: false, // 是否已从宿主取到状态
@@ -331,6 +371,9 @@ window.__ModuleLoader__.load({
         }
         setPassword('');
         await syncState();
+        // 解锁成功：广播 connection/reset，让平台重新拉取被数据闸拦掉的初始化数据。
+        // 不做这一步的话，工作区/会话列表会一直是空的，必须手动刷新页面。
+        notifyPlatformReady();
         await loadAutoLockSetting();
       }
 
@@ -681,6 +724,14 @@ window.__ModuleLoader__.load({
       // register 因键位不被 Web 白名单接受而抛错，并冒泡到 apply。
       inject: ['slots', 'shortcuts'],
       apply(ctx) {
+        // 保存 ctx 供组件在解锁成功后广播 connection/reset（见 notifyPlatformReady）。
+        ctxRef = ctx;
+        ctx.effect(function () {
+          return function () {
+            ctxRef = null;
+          };
+        }, 'dsh-lock: ctx ref');
+
         // 样式：幂等注册，卸载时移除（HMR 重复 apply 不叠加第二份）。
         ctx.effect(function () {
           var existing = document.querySelector('style[data-plugin-css="dsh-lock"]');
