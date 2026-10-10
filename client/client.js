@@ -344,11 +344,44 @@ window.__ModuleLoader__.load({
 
       var setupMode = !snapshot.configured;
 
+      /**
+       * 进入锁定态时自动聚焦密码框。
+       *
+       * ⚠️ 依赖必须含 snapshot.locked，不能只有 setupMode：
+       *   旧实现只在 setupMode 变化时聚焦，于是「解锁 → 手动/自动锁定」
+       *   这条最常见的路径永远不聚焦（setupMode 始终为 false），
+       *   用户看到密码框却直接敲键盘没反应，得先点一下输入框
+       *   —— 而锁定的目的恰恰就是让人回到「输密码」这一个动作。
+       *
+       * 聚焦时机放在下一帧（rAF），等遮罩元素真正挂到 DOM 后再聚焦 ——
+       * 同一次渲染里元素可能尚未可聚焦。无 rAF 时回退 setTimeout。
+       */
       React.useEffect(
         function () {
-          if (inputRef.current && inputRef.current.focus) inputRef.current.focus();
+          if (!snapshot.locked) return undefined;
+          var focus = function () {
+            var el = inputRef.current;
+            if (!el || typeof el.focus !== 'function') return;
+            try {
+              el.focus();
+            } catch (err) {
+              /* 聚焦失败不影响解锁流程：用户手动点一下即可 */
+            }
+          };
+          if (typeof requestAnimationFrame === 'function') {
+            var raf = requestAnimationFrame(function () {
+              requestAnimationFrame(focus);
+            });
+            return function () {
+              cancelAnimationFrame(raf);
+            };
+          }
+          var t = setTimeout(focus, 0);
+          return function () {
+            clearTimeout(t);
+          };
         },
-        [setupMode],
+        [setupMode, snapshot.locked],
       );
 
       /**
