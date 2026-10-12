@@ -3,8 +3,10 @@
 // 形态照官方模板 `cordis-plugin-development/templates/decoration/client.js`：
 // 一个 `__ModuleLoader__.load({ id, factory })`，factory 里 `return` 插件对象。
 //
-// ⚠️ 只允许 require 平台种子表内的模块。本文件只用 react；槽位服务走
-//    package.json 里 `dsh.client.inject` 声明的 "slots"。
+// ⚠️ 只允许 require 平台种子表内的模块。本文件只用 react；槽位 / 快捷键 /
+//    语言三个服务走 package.json 里 `dsh.client.inject` 声明的
+//    "@deepseek-ai/dsh-client-ui-slots" / "@deepseek-ai/dsh-client-shortcuts" /
+//    "@deepseek-ai/dsh-client-locale"。
 //
 // 契约来源（均经 cordis_inspect_query 实时核对，非猜测）：
 //
@@ -24,6 +26,18 @@
 //    即点进插件页直接可见（原先误用 plugins.row.config，需二次点击）。
 //
 // 4) 主题 token 只用 Theme.listTokens 实报的 14 个别名 token，明暗自动切换。
+//
+// 5) 界面文案中英双语走**平台官方 locale 服务**（`ctx.locale.register(NS, {zh, en})`
+//    + `ctx.locale.bind(NS)`），与官方插件同一套机制。组件不自己接 locale ——
+//    在 `ctx.slots.register` 的选项里给 `locale: NS`，渲染器（standardKit）会把
+//    绑定好的 `t` 作为 props 注入组件
+//    （契约：@deepseek-ai/dsh-client-ui-renderer/lib/client.js 的 localeSeat /
+//      `kit["t"] = localeSeat(face, entry.locale)`；
+//      未装 locale 插件时它会抛 SlotAssemblyError，而不是静默渲染 key）。
+//    故组件签名统一 `function X(props){ var t = props.t; }`，
+//    **不要**再写 `inject: () => ({ t })` —— 冗余，且会掩盖 locale 缺失的明确报错。
+//
+// 6) 宿主只回机器可读 code，不回面向用户的自然语言（见 lib/index.js）。
 window.__ModuleLoader__.load({
   id: 'dsh-lock',
   factory(require) {
@@ -96,32 +110,85 @@ window.__ModuleLoader__.load({
       '.dlk-ok{font-size:11px;color:var(--dsw-alias-state-success-primary)}',
     ].join('');
 
-    var LABELS = {
-      title: 'DSH 已锁定',
-      sub: '请输入密码继续',
-      setupTitle: '设置访问密码',
-      setupSub: '设置后，打开界面需要输入密码才能使用',
-      placeholder: '密码',
-      placeholderNew: '设置密码（至少 4 位）',
-      placeholderRepeat: '再次输入密码',
-      showPassword: '显示密码',
-      hidePassword: '隐藏密码',
-      unlock: '解锁',
-      setup: '设置并继续',
-      skip: '暂不设置',
-      lockNow: '锁定',
-      wrong: '密码不正确',
-      mismatch: '两次输入的密码不一致',
-      tooShort: '密码至少 4 位',
-      throttled: '尝试次数过多，请稍后再试',
-      failed: '操作失败，请重试',
-      unreachable: '无法连接 DSH 宿主，请确认服务正在运行后刷新页面。',
-      autoLock: '自动锁定',
-      autoLockNote: '无操作达到指定时长后自动锁定。默认关闭；锁定时长任务不会中断。',
-      saved: '已保存',
-      minutes: '分钟',
-      off: '关闭',
-      custom: '自定义',
+    // ---- 文案字典（平台官方 locale 服务；中英双语必须成对）----
+    //
+    // 走官方 locale 服务（`ctx.locale.register(NS, { zh, en })` + `bind`），
+    // 与官方插件同一套机制。语言切换时插槽里的文案会**实时**跟着变 ——
+    // 渲染器按字典 revision 重新注入 `t`（见 `localeSeat` 的缓存键）。
+    //
+    // ⚠️ 命名空间用**包名**，绝不复用官方或他人的命名空间：同名会撞
+    //    （重复 `(ns, locale)` 注册直接抛错）。
+    //
+    // ⚠️ 以下键**刻意不定义**，直接复用平台 `common` 字典（本命名空间未命中后
+    //    自动回落到 common）：`retry` / `loading` / `unknown`。
+    //    自己再写一遍会与平台文案不一致（common 的 retry 是「重试」/Retry）。
+    //
+    // ⚠️ 每条都是**一个完整句子**，变量用 `{name}` 占位（Translate 按
+    //    /\{(\w+)\}/g 替换）。不要拆成片段再拼接 —— 中英语序不同
+    //    （"{n} minutes" vs 「{n} 分钟」），拼接式无法重排。
+    //
+    // ⚠️ 运行时 register **不检查**两种语言是否都给全：漏键不报错，只会显示 key
+    //    本身。故两份字典的键必须由我们自己保证一致（见 apply 里的键一致性自查）。
+    var NS = 'dsh-lock';
+    var zh = {
+      'lock.title': 'DSH 已锁定',
+      'lock.sub': '请输入密码继续',
+      'setup.title': '设置访问密码',
+      'setup.sub': '设置后，打开界面需要输入密码才能使用',
+      'field.password': '密码',
+      'field.passwordNew': '设置密码（至少 4 位）',
+      'field.passwordRepeat': '再次输入密码',
+      'field.showPassword': '显示密码',
+      'field.hidePassword': '隐藏密码',
+      'button.unlock': '解锁',
+      'button.setup': '设置并继续',
+      'button.skip': '暂不设置',
+      'button.lock': '锁定',
+      'error.wrongPassword': '密码不正确',
+      'error.passwordMismatch': '两次输入的密码不一致',
+      'error.passwordTooShort': '密码至少 4 位',
+      'error.throttled': '尝试次数过多，请稍后再试',
+      'error.failed': '操作失败，请重试',
+      'error.unreachable': '无法连接 DSH 宿主，请确认服务正在运行后刷新页面。',
+      'error.hostUnavailableTitle': 'DSH 暂时无法访问',
+      'hint.credentials': '密码经 scrypt 单向哈希存储，忘记密码可删除 $DSH_HOME/{path} 后重启 DSH。',
+      'autoLock.label': '自动锁定',
+      'autoLock.note': '无操作达到指定时长后自动锁定。默认关闭；锁定时长任务不会中断。',
+      'autoLock.saved': '已保存',
+      'autoLock.minutes': '{n} 分钟',
+      'autoLock.off': '关闭',
+      'autoLock.custom': '自定义',
+      'autoLock.customPlaceholder': '分钟',
+    };
+    var en = {
+      'lock.title': 'DSH is locked',
+      'lock.sub': 'Enter your password to continue',
+      'setup.title': 'Set an access password',
+      'setup.sub': 'Once set, opening the interface requires this password.',
+      'field.password': 'Password',
+      'field.passwordNew': 'Set a password (at least 4 characters)',
+      'field.passwordRepeat': 'Enter the password again',
+      'field.showPassword': 'Show password',
+      'field.hidePassword': 'Hide password',
+      'button.unlock': 'Unlock',
+      'button.setup': 'Set and continue',
+      'button.skip': 'Not now',
+      'button.lock': 'Lock',
+      'error.wrongPassword': 'Incorrect password',
+      'error.passwordMismatch': 'The two passwords do not match',
+      'error.passwordTooShort': 'The password must be at least 4 characters',
+      'error.throttled': 'Too many attempts. Please try again later.',
+      'error.failed': 'Something went wrong. Please try again.',
+      'error.unreachable': 'Cannot reach the DSH host. Make sure the service is running, then refresh the page.',
+      'error.hostUnavailableTitle': 'DSH is temporarily unavailable',
+      'hint.credentials': 'The password is stored as a one-way scrypt hash. If you forget it, delete $DSH_HOME/{path} and restart DSH.',
+      'autoLock.label': 'Auto-lock',
+      'autoLock.note': 'Locks after the specified period of inactivity. Off by default; locking does not interrupt a running task.',
+      'autoLock.saved': 'Saved',
+      'autoLock.minutes': '{n} minutes',
+      'autoLock.off': 'Off',
+      'autoLock.custom': 'Custom',
+      'autoLock.customPlaceholder': 'Minutes',
     };
 
     // ---------------------------------------------------------------------
@@ -321,6 +388,8 @@ window.__ModuleLoader__.load({
     // 组件：遮罩（视觉闸）
     // ---------------------------------------------------------------------
     function Veil(props) {
+      // t 由渲染器注入（槽注册时给 `locale: NS`），语言切换会实时跟随。
+      var t = props.t;
       var snapshot = useLockState();
       var passwordState = React.useState('');
       var password = passwordState[0];
@@ -451,9 +520,9 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dlk-eye',
               disabled: busy,
-              'aria-label': visible ? LABELS.hidePassword : LABELS.showPassword,
+              'aria-label': visible ? t('field.hidePassword') : t('field.showPassword'),
               'aria-pressed': visible ? 'true' : 'false',
-              title: visible ? LABELS.hidePassword : LABELS.showPassword,
+              title: visible ? t('field.hidePassword') : t('field.showPassword'),
               // 阻止提交：这是表单内的按钮，显式 type=button 之外再兜一层，
               // 避免某些浏览器把它当 submit。
               onClick: function (e) {
@@ -512,11 +581,11 @@ window.__ModuleLoader__.load({
         setError('');
         if (setupMode) {
           if (password.length < 4) {
-            setError(LABELS.tooShort);
+            setError(t('error.passwordTooShort'));
             return;
           }
           if (password !== repeat) {
-            setError(LABELS.mismatch);
+            setError(t('error.passwordMismatch'));
             return;
           }
           setBusy(true);
@@ -527,7 +596,7 @@ window.__ModuleLoader__.load({
           });
           setBusy(false);
           if (created.error) {
-            setError(LABELS.failed);
+            setError(t('error.failed'));
             return;
           }
           setPassword('');
@@ -545,11 +614,11 @@ window.__ModuleLoader__.load({
         });
         setBusy(false);
         if (result.error === 'throttled') {
-          setError(LABELS.throttled);
+          setError(t('error.throttled'));
           return;
         }
         if (result.error) {
-          setError(LABELS.wrong);
+          setError(t('error.wrongPassword'));
           setPassword('');
           return;
         }
@@ -583,8 +652,8 @@ window.__ModuleLoader__.load({
                 h('path', { d: 'M8 10.5V7.8a4 4 0 0 1 8 0v2.7' }),
               ),
             ),
-            h('h2', { className: 'dlk-title' }, 'DSH 暂时无法访问'),
-            h('p', { className: 'dlk-sub' }, LABELS.unreachable),
+            h('h2', { className: 'dlk-title' }, t('error.hostUnavailableTitle')),
+            h('p', { className: 'dlk-sub' }, t('error.unreachable')),
             h(
               'button',
               {
@@ -594,7 +663,9 @@ window.__ModuleLoader__.load({
                   syncState();
                 },
               },
-              '重试',
+              // 'retry' 刻意不写进字典：平台 common 命名空间已有
+              // （zh「重试」/ en「Retry」），本命名空间未命中会回落到它。
+              t('retry'),
             ),
           ),
         );
@@ -611,13 +682,13 @@ window.__ModuleLoader__.load({
             h('path', { d: 'M8 10.5V7.8a4 4 0 0 1 8 0v2.7' }),
           ),
         ),
-        h('h2', { key: 'title', className: 'dlk-title' }, setupMode ? LABELS.setupTitle : LABELS.title),
-        h('p', { key: 'sub', className: 'dlk-sub' }, setupMode ? LABELS.setupSub : LABELS.sub),
+        h('h2', { key: 'title', className: 'dlk-title' }, setupMode ? t('setup.title') : t('lock.title')),
+        h('p', { key: 'sub', className: 'dlk-sub' }, setupMode ? t('setup.sub') : t('lock.sub')),
         passwordField({
           key: 'pwd',
           inputRef: inputRef,
           autoComplete: setupMode ? 'new-password' : 'current-password',
-          placeholder: setupMode ? LABELS.placeholderNew : LABELS.placeholder,
+          placeholder: setupMode ? t('field.passwordNew') : t('field.password'),
           value: password,
           onChange: setPassword,
           visible: pwVisibleState[0],
@@ -632,7 +703,7 @@ window.__ModuleLoader__.load({
           passwordField({
             key: 'repeat',
             autoComplete: 'new-password',
-            placeholder: LABELS.placeholderRepeat,
+            placeholder: t('field.passwordRepeat'),
             value: repeat,
             onChange: setRepeat,
             visible: repeatVisibleState[0],
@@ -654,7 +725,7 @@ window.__ModuleLoader__.load({
             className: 'dlk-btn dlk-btn-primary dlk-btn-block',
             disabled: busy || !password,
           },
-          busy ? '…' : setupMode ? LABELS.setup : LABELS.unlock,
+          busy ? '…' : setupMode ? t('button.setup') : t('button.unlock'),
         ),
       );
 
@@ -678,26 +749,27 @@ window.__ModuleLoader__.load({
                 });
               },
             },
-            LABELS.skip,
+            t('button.skip'),
           ),
         );
         children.push(
           h(
             'p',
             { key: 'hint', className: 'dlk-hint' },
-            // 路径由宿主经 /status 下发，不在此写死 ——
+            // 路径由宿主经 /status 下发（单一事实来源），不在此写死 ——
             // 目录改过一次（dsh-lock → .dsh-lock），写死会导致文案指向
             // 不存在的文件（实测踩到）。缺省回退到已知路径。
-            '密码经 scrypt 单向哈希存储，忘记密码可删除 $DSH_HOME/' +
-              (snapshot.credentialsPath || '.dsh-lock/credentials.json') +
-              ' 后重启 DSH。',
+            // 整句（含占位符）进字典：中英语序不同，不能拼片段。
+            t('hint.credentials', {
+              path: snapshot.credentialsPath || '.dsh-lock/credentials.json',
+            }),
           ),
         );
       }
 
       return h(
         'div',
-        { className: 'dlk-veil', role: 'dialog', 'aria-modal': 'true', 'aria-label': setupMode ? LABELS.setupTitle : LABELS.title },
+        { className: 'dlk-veil', role: 'dialog', 'aria-modal': 'true', 'aria-label': setupMode ? t('setup.title') : t('lock.title') },
         h('form', { className: 'dlk-card', onSubmit: submit }, children),
       );
     }
@@ -706,12 +778,13 @@ window.__ModuleLoader__.load({
     // 组件：侧栏底部的锁定按钮
     // ---------------------------------------------------------------------
     function LockButton(props) {
+      var t = props.t;
       var snapshot = useLockState();
       var wide = props && props.wide !== false;
       // 已解锁（或刚跳过引导）才显示；锁定态下遮罩已盖住侧栏，按钮不可见。
       if (snapshot.locked) return null;
 
-      var label = snapshot.configured ? LABELS.lockNow : LABELS.setupTitle;
+      var label = snapshot.configured ? t('button.lock') : t('setup.title');
 
       // 图标尺寸对齐官方设置触发器：宽态 16、窄态 18。
       var icon = h(
@@ -783,6 +856,7 @@ window.__ModuleLoader__.load({
     var PRESETS = [0, 5, 10, 15, 30];
 
     function AutoLockSetting(props) {
+      var t = props.t;
       var view = props && props.view ? props.view : 'page';
       var minutesState = React.useState(0);
       var minutes = minutesState[0];
@@ -821,7 +895,7 @@ window.__ModuleLoader__.load({
 
       if (view === 'summary') {
         if (!loaded) return h('span', null, '…');
-        return h('span', null, minutes === 0 ? LABELS.off : minutes + ' ' + LABELS.minutes);
+        return h('span', null, minutes === 0 ? t('autoLock.off') : t('autoLock.minutes', { n: minutes }));
       }
 
       async function save(value) {
@@ -858,16 +932,16 @@ window.__ModuleLoader__.load({
       var current = mode === 'custom' ? 'custom' : String(minutes);
 
       var children = [
-        h('span', { key: 'label', className: 'dlk-cfg-label' }, LABELS.autoLock),
+        h('span', { key: 'label', className: 'dlk-cfg-label' }, t('autoLock.label')),
         h(
           'select',
           { key: 'select', className: 'dlk-select', value: current, onChange: onSelect },
-          h('option', { value: '0' }, LABELS.off),
-          h('option', { value: '5' }, '5 ' + LABELS.minutes),
-          h('option', { value: '10' }, '10 ' + LABELS.minutes),
-          h('option', { value: '15' }, '15 ' + LABELS.minutes),
-          h('option', { value: '30' }, '30 ' + LABELS.minutes),
-          h('option', { value: 'custom' }, LABELS.custom),
+          h('option', { value: '0' }, t('autoLock.off')),
+          h('option', { value: '5' }, t('autoLock.minutes', { n: 5 })),
+          h('option', { value: '10' }, t('autoLock.minutes', { n: 10 })),
+          h('option', { value: '15' }, t('autoLock.minutes', { n: 15 })),
+          h('option', { value: '30' }, t('autoLock.minutes', { n: 30 })),
+          h('option', { value: 'custom' }, t('autoLock.custom')),
         ),
       ];
 
@@ -878,7 +952,7 @@ window.__ModuleLoader__.load({
             className: 'dlk-input dlk-input-num',
             type: 'number',
             min: 1,
-            placeholder: LABELS.minutes,
+            placeholder: t('autoLock.customPlaceholder'),
             value: custom,
             onChange: function (e) {
               setCustom(e.target.value);
@@ -889,13 +963,13 @@ window.__ModuleLoader__.load({
         );
       }
 
-      if (saved) children.push(h('span', { key: 'saved', className: 'dlk-ok' }, LABELS.saved));
+      if (saved) children.push(h('span', { key: 'saved', className: 'dlk-ok' }, t('autoLock.saved')));
 
       return h(
         'div',
         { className: 'dlk-cfg' },
         h('div', { className: 'dlk-cfg-row' }, children),
-        h('p', { className: 'dlk-note' }, LABELS.autoLockNote),
+        h('p', { className: 'dlk-note' }, t('autoLock.note')),
       );
     }
 
@@ -906,6 +980,7 @@ window.__ModuleLoader__.load({
       // 服务依赖：
       //   - slots     ：注册遮罩 / 侧栏按钮 / 设置页
       //   - shortcuts ：注册 ⌘⇧. 锁定快捷键
+      //   - locale    ：界面文案中英双语（官方 locale 服务）
       //
       // 订正一处曾经的误判：`shortcuts` 确实可注入。实测确认提供者
       // @deepseek-ai/dsh-client-shortcuts 在 boot 清单中先于本插件加载
@@ -917,8 +992,37 @@ window.__ModuleLoader__.load({
       //
       // 真正导致 "1 entry did not activate" 的原因见下方快捷键区块：
       // register 因键位不被 Web 白名单接受而抛错，并冒泡到 apply。
-      inject: ['slots', 'shortcuts'],
+      inject: ['slots', 'shortcuts', 'locale'],
       apply(ctx) {
+        // 注册中英字典（官方 locale 服务）。
+        //
+        // ⚠️ 运行时的 register **不校验**「两种语言是否都给全」—— 那只是 TS 侧对
+        //    LocaleNamespaceMap 的编译期约束，纯 JS bundle 拿不到。漏一种语言不会
+        //    报错，只会回落到 common 或直接显示 key 本身（很难被发现），
+        //    故这里主动做一次键一致性自查并告警。
+        try {
+          var zhKeys = Object.keys(zh);
+          var enKeys = Object.keys(en);
+          var missingEn = zhKeys.filter(function (k) { return !(k in en); });
+          var missingZh = enKeys.filter(function (k) { return !(k in zh); });
+          if (missingEn.length || missingZh.length) {
+            console.warn('[dsh-lock] dictionary keys mismatch',
+              { missingEn: missingEn, missingZh: missingZh });
+          }
+        } catch (err) {
+          /* 自查本身绝不影响注册 */
+        }
+
+        // 用 ctx.effect 包住：卸载时自动撤销该命名空间，HMR 重载不会撞
+        // 「locale namespace "dsh-lock" already has locale "zh"」。
+        ctx.effect(function () {
+          return ctx.locale.register(NS, { zh: zh, en: en });
+        }, 'dsh-lock: dictionaries');
+        // 绑定本命名空间的翻译函数（给注册期的 label thunk 用；组件里的 t 由
+        // 渲染器按槽注册选项 `locale: NS` 注入，见文件头第 5 条）。
+        // bind 返回的引用按命名空间稳定，不会破坏 memoization。
+        var t = ctx.locale.bind(NS);
+
         // 保存 ctx 供组件在解锁成功后广播 connection/reset（见 notifyPlatformReady）。
         ctxRef = ctx;
         ctx.effect(function () {
@@ -953,7 +1057,7 @@ window.__ModuleLoader__.load({
             veilDispose = null;
           }
           veilDispose = ctx.slots.register(
-            { name: 'shell.overlay', id: 'dsh-lock-veil', order: 1000 },
+            { name: 'shell.overlay', id: 'dsh-lock-veil', order: 1000, locale: NS },
             Veil,
           );
         };
@@ -973,14 +1077,20 @@ window.__ModuleLoader__.load({
 
         // 手动锁定：侧栏底部，紧挨设置。
         ctx.slots.inject('sidebar.footer.action', function () {
-          return ctx.slots.register({ name: 'sidebar.footer.action', id: 'dsh-lock/lock-now', order: 50 }, LockButton);
+          return ctx.slots.register(
+            { name: 'sidebar.footer.action', id: 'dsh-lock/lock-now', order: 50, locale: NS },
+            LockButton,
+          );
         });
 
         // 自动锁定设置：插件详情页直接显示（key = 包名）。
         // 用 plugins.bundle.config 而非 plugins.row.config —— 后者需要再点一次
         // 组件的「配置」才进入，前者点进插件页即可见。
         ctx.slots.inject('plugins.bundle.config', function () {
-          return ctx.slots.register({ name: 'plugins.bundle.config', key: 'dsh-lock' }, AutoLockSetting);
+          return ctx.slots.register(
+            { name: 'plugins.bundle.config', key: 'dsh-lock', locale: NS },
+            AutoLockSetting,
+          );
         });
 
         // ---------------------------------------------------------------------
@@ -1042,10 +1152,16 @@ window.__ModuleLoader__.load({
             })();
             var disposeShortcut = ctx.shortcuts.register({
               id: 'dsh-lock.lock',
+              // label 用**函数**而非字符串：快捷键面板每次刷新都会求值，
+              // 语言切换后这一行会跟着变，不需要重新注册。
               label: function () {
-                return LABELS.lockNow;
+                return t('button.lock');
               },
-              aliases: ['lock', '锁定'],
+              // aliases 是快捷键面板的**搜索别名**，不是界面文案 —— 平台没有
+              // 本地化别名的机制（官方各包一律写英文短名，如 "toggle left
+              // sidebar"）。故这里只放英文：写死中文会让英文界面下出现中文，
+              // 代价是中文用户搜「锁定」搜不到（用快捷键键位或英文 lock 可搜到）。
+              aliases: ['lock', 'lock now'],
               defaults: LOCK_DEFAULTS,
               // 三个区域都接受，否则在输入框里按不出来。
               regions: ['page', 'editable', 'terminal'],

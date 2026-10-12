@@ -8,6 +8,7 @@
 - **手动锁定**：随时一键锁定（侧边栏按钮 + 快捷键）
 - **自动锁定**：可配置空闲时长后自动锁定
 - **密码安全**：仅存 scrypt 单向哈希，**永不保存明文**
+- **界面中英双语**：跟随 DSH 的界面语言设置实时切换（见下方「界面文案（运行时 locale）」）
 
 ## 安装
 
@@ -46,12 +47,49 @@ dsh plugin --profile web add github:felixpu/dsh-lock
 
 - `inject: ['webServer']`，注册解锁/锁定相关的同源路由
 - 无客户端以外的外部依赖
+- **不产出面向用户的自然语言**：所有路由响应只回机器可读的 `error` code
+  （如 `invalid-password` / `too-many-attempts` / `locked`），由客户端字典翻译。
+  宿主无从知道 UI 语言，写死中/英文都会在另一种语言下露馅。
+  唯一保留自然语言的地方是宿主**日志**（`ctx.logger.info`），那是给开发者看的。
+
+## 界面文案（运行时 locale）
+
+界面文案走**平台官方 locale 服务**，中英双语：
+
+```js
+// client/client.js
+inject: ['slots', 'shortcuts', 'locale'],
+apply(ctx) {
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), NS + ': dictionaries');
+  const t = ctx.locale.bind(NS);
+  ctx.slots.register({ name: 'shell.overlay', id: '…', locale: NS }, Veil); // ← 渲染器据此注入 t
+}
+```
+
+组件从 `props.t` 拿翻译函数，**不需要**自己 `inject: () => ({ t })` ——
+槽注册选项里给了 `locale: NS`，渲染器（`@deepseek-ai/dsh-client-ui-renderer` 的
+`standardKit()`）会把绑定好的 `t` 注入 props；缺 locale 插件时它会抛出明确的
+`SlotAssemblyError`，而不是静默渲染出 key 名。
+
+约定：
+
+- 一条消息 = 一个完整句子，变量用 `{name}` 占位（如 `'autoLock.minutes': '{n} 分钟'` /
+  `'{n} minutes'`）。**不拆片段拼接**，否则中英语序无法重排。
+- 键名小写点分层级：`lock.title`、`field.password`、`button.unlock`、
+  `error.wrongPassword`、`autoLock.minutes`。
+- `retry` / `loading` / `unknown` 等平台 `common` 命名空间已有的通用词**不重复定义**，
+  查表未命中会自动回落到 common。
+- **zh 与 en 的键必须完全一致**：运行时不校验，漏键只会显示 key 名。故 `apply` 里
+  做了一次键一致性自查，不一致时 `console.warn` 点名缺的键。
+- 需要本地化的字符串**不能**只存在于源码字面量里 —— 静态审计
+  （去掉注释后 grep 中文字符）应只剩注释与宿主日志。
 
 ## 展示元数据（locale）
 
 `locale/en.json` 与 `locale/zh.json` 提供**插件展示元数据**（`meta.title` / `meta.description`），
 Plugin Manager 与设置页**无需激活插件**即可读取，用于显示本地化的插件名与说明。
-这与运行时 UI 文案（客户端 `ctx.locale.register`）是两套东西。
+这与运行时 UI 文案（客户端 `ctx.locale.register`，见上一节）是**两套互不相关**的东西：
+前者是 JSON 资源、由宿主按 Node 模块解析器读取；后者是客户端代码里的字典对象。
 
 ```json
 { "meta": { "title": "…", "description": "…" } }
@@ -73,7 +111,13 @@ Plugin Manager 与设置页**无需激活插件**即可读取，用于显示本�
 | `sidebar.footer.action` | 「立即锁定」按钮 |
 | `plugins.bundle.config` | 自动锁定设置面板 |
 
-客户端 bundle 仅 `require` 平台种子表内的模块（`react`、`@deepseek-ai/dsh-client-ui-primitives`）。
+客户端 bundle 仅 `require` 平台种子表内的模块（本包只用到 `react`）。
+槽位 / 快捷键 / 语言三个服务通过 `package.json` 的 `dsh.client.inject` 声明，
+在插件对象 `inject: ['slots', 'shortcuts', 'locale']` 里注入 —— 服务不走 `require`。
+
+快捷键的 `label` 用**函数**（thunk）而非字符串，语言切换后快捷键面板那一行会跟着变；
+`aliases` 是快捷键面板的**搜索别名**、平台没有本地化机制，故只放英文
+（官方各包一律如此），写死中文会让英文界面下露出中文。
 
 ## 许可证
 
