@@ -1157,11 +1157,17 @@ window.__ModuleLoader__.load({
               label: function () {
                 return t('button.lock');
               },
-              // aliases 是快捷键面板的**搜索别名**，不是界面文案 —— 平台没有
-              // 本地化别名的机制（官方各包一律写英文短名，如 "toggle left
-              // sidebar"）。故这里只放英文：写死中文会让英文界面下出现中文，
-              // 代价是中文用户搜「锁定」搜不到（用快捷键键位或英文 lock 可搜到）。
-              aliases: ['lock', 'lock now'],
+              // aliases 是快捷键面板的**搜索别名**，不是界面文案（显示名走上面的
+              // label thunk，会跟随语言切换；别名不出现在界面文字里）。
+              //
+              // 中英文都放：平台搜索只匹配 aliases，若只给英文，中文用户搜
+              // 「锁定」会一无所获（实测反馈：搜 lock 能搜到、搜「锁定」搜不到）。
+              // 官方各包只写英文别名，但官方是英文产品；本插件界面默认中文，
+              // 故双语并列。
+              //
+              // 不采用「按当前语言动态给别名」：aliases 是注册时传入的静态数组，
+              // 切语言不会重新注册 —— 取当时的语言值只会被固化，反而更糟。
+              aliases: ['lock', 'lock now', '锁定', '锁屏'],
               defaults: LOCK_DEFAULTS,
               // 三个区域都接受，否则在输入框里按不出来。
               regions: ['page', 'editable', 'terminal'],
