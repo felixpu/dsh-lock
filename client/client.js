@@ -43,6 +43,11 @@ window.__ModuleLoader__.load({
   factory(require) {
     var React = require('react');
     var h = React.createElement;
+    // Tooltip 来自种子表内的 @deepseek-ai/dsh-client-ui-primitives（允许 require）。
+    // 它的 shortcutKeys 参数会把键位渲染成**平台格式化的键帽**并放进气泡 ——
+    // 这正是「设置」那一行按钮的做法（平时不显示，悬停才浮出 ⇧⌘,）。
+    var primitives = require('@deepseek-ai/dsh-client-ui-primitives');
+    var Tooltip = primitives && primitives.Tooltip;
 
     var API = '/api/dsh-lock';
 
@@ -92,12 +97,8 @@ window.__ModuleLoader__.load({
       // ⚠️ 它不在 Theme.listTokens 的 14 项公开清单里，但确为平台真实变量。
       '.dlk-foot:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dlk-foot-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;text-align:left}',
-      // ---- 快捷键键帽（对齐官方 ShortcutKeys 的 plain 变体）----
-      // 实测规范来源：dsh-client-ui-primitives/lib/ShortcutKeys.module.css
-      '.dlk-keys{display:inline-flex;flex:none;align-items:center;gap:3px;margin-left:auto;',
-      'color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;white-space:nowrap}',
-      '.dlk-key{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;',
-      'font:inherit;border:none;background:none;padding:0}',
+      // 键帽样式已移除：改由官方 Tooltip 的 shortcutKeys 渲染
+      // （平台自带 ShortcutKeys 样式），不再自己画 kbd。
       '.dlk-foot-rail{width:36px;height:36px;padding:0;justify-content:center;flex:none}',
       // ---- 设置页 ----
       '.dlk-cfg{display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--dsw-alias-label-primary)}',
@@ -913,50 +914,51 @@ window.__ModuleLoader__.load({
       var children = [icon];
       if (wide) {
         children.push(h('span', { key: 'label', className: 'dlk-foot-label' }, label));
-        // 快捷键键帽提示：kbd 元素 + 官方 ShortcutKeys 的 plain 样式
-        // （实测规范：dsh-client-ui-primitives/lib/ShortcutKeys.module.css
-        //   .keys → gap:3px; color:var(--dsw-alias-label-tertiary);
-        //           font-size:12px; line-height:16px；plain 变体无底色）。
-        //
-        // 键帽取自平台 catalog（useShortcutKeys），**不是写死的常量** ——
-        // 用户在「设置 → 通用 → 快捷键」改键位后这里会跟着变，与「设置」
-        // 那一行行为一致。取不到时才回退到 fallbackKeys()。
-        // 空数组 = 该命令当前无绑定（用户清除了键位）→ 不显示假提示。
-        var keys = liveKeys === null ? fallbackKeys() : liveKeys;
-        if (keys.length > 0) {
-          children.push(
-            h(
-              'span',
-              { key: 'keys', className: 'dlk-keys', 'aria-hidden': 'true' },
-              keys.map(function (k, i) {
-                return h('kbd', { key: 'k' + i, className: 'dlk-key' }, k);
-              }),
-            ),
-          );
-        }
       }
 
-      return h(
-        'div',
-        { className: 'dlk-foot-row' },
-        h(
-          'button',
-          {
-            type: 'button',
-            className: wide ? 'dlk-foot' : 'dlk-foot dlk-foot-rail',
-            title: label,
-            'aria-label': label,
-            onClick: function () {
-              // 未设密码 → 本次会话重新打开设置引导；已设密码 → 立即锁定。
-              if (snapshot.configured) lockNow();
-              // ⚠️ 只临时显示引导，**不清除**宿主持久化的 setupDismissed ——
-              // 否则「刷新后不再打扰」的承诺会被这一次点击破坏。
-              else setState({ guideForced: true, locked: true });
-            },
+      // 键位以**悬停 tooltip** 呈现，而不是常驻显示在按钮里 ——
+      // 与「设置」那一行完全一致（平时只见图标+文字，悬停才浮出键帽）。
+      // Tooltip 的 shortcutKeys 会由平台渲染成格式化键帽，因此不需要
+      // 自己画 kbd，也不需要 .dlk-keys/.dlk-key 样式。
+      //
+      // 键位取自平台 catalog（useShortcutKeys），会跟随用户改键变化；
+      // 取不到时回退 fallbackKeys()；空数组（用户清除了绑定）不显示。
+      var keys = liveKeys === null ? fallbackKeys() : liveKeys;
+
+      var button = h(
+        'button',
+        {
+          type: 'button',
+          className: wide ? 'dlk-foot' : 'dlk-foot dlk-foot-rail',
+          'aria-label': label,
+          onClick: function () {
+            // 未设密码 → 本次会话重新打开设置引导；已设密码 → 立即锁定。
+            if (snapshot.configured) lockNow();
+            // ⚠️ 只临时显示引导，**不清除**宿主持久化的 setupDismissed ——
+            // 否则「刷新后不再打扰」的承诺会被这一次点击破坏。
+            else setState({ guideForced: true, locked: true });
           },
-          children,
-        ),
+        },
+        children,
       );
+
+      // Tooltip 缺失（理论上不会，种子表内）时退化为裸按钮，功能不受影响。
+      var anchored =
+        typeof Tooltip === 'function'
+          ? h(
+              Tooltip,
+              {
+                label: label,
+                shortcutKeys: keys.length > 0 ? keys : undefined,
+                side: 'right',
+                // 与官方按钮一致：悬停延迟 500ms，避免扫过时误弹。
+                delayMs: 500,
+              },
+              button,
+            )
+          : button;
+
+      return h('div', { className: 'dlk-foot-row' }, anchored);
     }
 
     // ---------------------------------------------------------------------
