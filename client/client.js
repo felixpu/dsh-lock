@@ -531,30 +531,40 @@ window.__ModuleLoader__.load({
        * 聚焦时机放在下一帧（rAF），等遮罩元素真正挂到 DOM 后再聚焦 ——
        * 同一次渲染里元素可能尚未可聚焦。无 rAF 时回退 setTimeout。
        */
+      /**
+       * 把焦点送回主密码输入框，可选全选其内容。
+       *
+       * 延后到下一帧执行：提交/报错后的 React 重渲染需要先落到 DOM，
+       * 否则此刻的元素可能还是旧的（或被 disabled 过）。
+       * 无 rAF 时回退 setTimeout。
+       *
+       * @param selectAll 是否同时全选内容（输错后用它，直接打字即覆盖）
+       */
+      function focusPasswordInput(selectAll) {
+        var run = function () {
+          var el = inputRef.current;
+          if (!el || typeof el.focus !== 'function') return;
+          try {
+            el.focus();
+            if (selectAll && typeof el.select === 'function') el.select();
+          } catch (err) {
+            /* 聚焦/选中失败不影响解锁流程：用户手动点一下即可 */
+          }
+        };
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(run);
+          });
+        } else {
+          setTimeout(run, 0);
+        }
+      }
+
       React.useEffect(
         function () {
           if (!snapshot.locked) return undefined;
-          var focus = function () {
-            var el = inputRef.current;
-            if (!el || typeof el.focus !== 'function') return;
-            try {
-              el.focus();
-            } catch (err) {
-              /* 聚焦失败不影响解锁流程：用户手动点一下即可 */
-            }
-          };
-          if (typeof requestAnimationFrame === 'function') {
-            var raf = requestAnimationFrame(function () {
-              requestAnimationFrame(focus);
-            });
-            return function () {
-              cancelAnimationFrame(raf);
-            };
-          }
-          var t = setTimeout(focus, 0);
-          return function () {
-            clearTimeout(t);
-          };
+          focusPasswordInput(false);
+          return undefined;
         },
         [setupMode, snapshot.locked],
       );
@@ -725,7 +735,14 @@ window.__ModuleLoader__.load({
         }
         if (result.error) {
           setError(t('error.wrongPassword'));
-          setPassword('');
+          // ⚠️ 不清空已输入的密码，也不让它失去焦点（实测反馈）：
+          //   - 清空 = 用户白输一遍，改一个字符也得全部重打；
+          //   - 焦点丢失的直接原因：清空后 submit 按钮变 disabled，
+          //     而 disabled 元素会被浏览器强制失焦，焦点掉到 body，
+          //     用户接着敲键盘没有任何反应（以为卡死）。
+          // 改为：保留内容、把焦点送回输入框并全选 —— 直接打字即覆盖，
+          // 想微调也可用方向键（全选状态下输入会替换，符合"改错重打"的预期）。
+          focusPasswordInput(true);
           return;
         }
         setPassword('');
