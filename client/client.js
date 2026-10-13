@@ -324,40 +324,69 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------------
     // 插件 ctx 的模块级引用（apply 时赋值）。
-    // 组件（Veil 等）拿不到 ctx，但解锁成功时需要 ctx.emit 通知平台重拉数据。
+    // 组件（Veil 等）拿不到 ctx，但解锁成功时要触发平台重连，让平台自己重建数据。
     var ctxRef = null;
 
     /**
-     * 通知平台「连接已就绪，请重新拉取数据」。
+     * 通知平台「现在可以拉数据了」——解锁成功后调用。
      *
-     * 为什么必须做（实测确诊的真 bug）：
-     *   数据闸在锁定态会把平台的全部初始化请求拦成 401
-     *   （/api/session/list、/api/settings/describe、/api/credentials/describe …）。
-     *   平台把这些请求记为「已完成（失败）」，**解锁后不会自动重试**。
-     *   结果：解锁进入界面后工作区/会话数据始终为空，必须手动刷新页面才恢复。
+     * ⚠️ 这里经历过一次**错误修复**，务必不要退回旧写法（源码逐条核对过）：
      *
-     * 修复手段：广播平台的 `connection/reset` 事件 —— 这正是 dsh-api-gateway
-     *   在「连接建立/重连成功」时发出的信号，各 UI 模块（workspace、skill、
-     *   model-selection 等）都监听它并重新初始化数据。
-     *   解锁后服务端已放行，语义与「连接刚就绪」完全一致。
+     * 【曾经的错误做法】`ctx.emit('connection/reset')`。
+     *   看起来对：该事件确实由 dsh-api-gateway 在 onConnected 时发出，
+     *   且 workspace / skill / model-selection 等模块监听它。
+     *   但它**对会话列表完全无效** —— 实测解锁后发出的一堆请求里
+     *   唯独没有 `/api/session/list`，会话列表因此始终为空
+     *   （刷新页面才正常，因为刷新会重建整个客户端 ctx）。
      *
-     * 契约来源：官方文档 develop/framework/events —— `ctx.emit(name, payload)`
-     *   为标准触发 API；事件本身见 client/Event 目录 connection/reset。
+     * 【为什么无效】真正的数据重拉由「连接代际（generation）」驱动，不是事件：
+     *   - `publishGeneration`（dsh-client-connection/lib/client.js）维护
+     *     **独立的 generationListeners**，与 ctx.emit 的订阅者是两套东西；
+     *   - 会话控制器订阅的是**代际**：
+     *     `ctx.effect(() => connection.generation.subscribe(connected), …)`
+     *     （dsh-api-session-controller/lib/types/client/index.js:50）；
+     *   - `connected()` 里调用的 `handleConnected()`（同包 lib/client.js）才是
+     *     真正清空并重拉会话列表的动作 —— 它会 `listInflight = null` 解掉
+     *     去重闸，然后 `refreshList()`；
+     *   - **emit 事件不会改变 generation 快照**，所以代际订阅者一次都不会被
+     *     重新调用，inflight 永远挂着锁定期的 401 失败 → 列表永久为空。
      *
-     * 容错：整个调用包 try/catch，且延迟一拍执行（等遮罩卸载、状态落定），
-     *   任何失败只影响「要不要手动刷新」，绝不影响解锁本身。
+     * 【宿主重启 vs 刷新页面的分水岭】
+     *   - 刷新页面：浏览器 ctx 全新重建，代际在解锁**之后**才建立，
+     *     `connected()` 天然跑在解锁后 → 正常（这也是 emit 看似有效的原因）；
+     *   - 宿主重启：页面没刷新，旧 ctx 存活，代际早在**遮罩还在时**就建好了、
+     *     且 `connected()` 已带着 401 失败跑过一轮，此后无人再触发它。
+     *
+     * 【正确做法】调用官方 `connection.reconnect()`：
+     *   - 它会 `emitState("connecting")` → `publishGeneration(undefined)`
+     *     （代际先变空），再中止当前连接并重连，重连成功后
+     *     `publishGeneration(新代际)` → 所有代际订阅者被重新调用
+     *     → `handleConnected()` 清 inflight 并重拉数据；
+     *   - 同时平台自己会 emit `connection/reset`，所以事件订阅者也一并覆盖；
+     *   - 换句话说：**让平台自己重建代际，不要自己冒充那个信号。**
+     *
+     * 容错：全程 try/catch；reconnect 不可用时退回 emit 事件（对 workspace /
+     *   skill / model-selection 等仍有效），最坏情况才是「需手动刷新」。
+     *   任何失败都不影响解锁本身。
      */
     function notifyPlatformReady() {
       try {
-        if (!ctxRef || typeof ctxRef.emit !== 'function') return;
-        // 延迟到当前渲染与状态提交之后再广播，避免与遮罩卸载争抢同一帧。
-        setTimeout(function () {
-          try {
-            ctxRef.emit('connection/reset');
-          } catch (err) {
-            /* 广播失败：最坏情况是需要用户手动刷新 */
-          }
-        }, 0);
+        var connection =
+          ctxRef && typeof ctxRef.get === 'function' ? ctxRef.get('connection') : undefined;
+        if (connection && typeof connection.reconnect === 'function') {
+          // 立即执行，不延后：代际重建越早，平台越早开始重拉。
+          connection.reconnect();
+          return;
+        }
+      } catch (err) {
+        /* 取不到服务或调用失败 → 落到下面的兜底 */
+      }
+      // 兜底：至少广播事件（对部分模块有效）。即使这里也失败，
+      // 最坏结果只是需要用户手动刷新页面。
+      try {
+        if (ctxRef && typeof ctxRef.emit === 'function') {
+          ctxRef.emit('connection/reset');
+        }
       } catch (err) {
         /* 同上：不影响解锁结果 */
       }
