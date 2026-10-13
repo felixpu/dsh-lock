@@ -943,19 +943,17 @@ window.__ModuleLoader__.load({
       );
 
       // Tooltip 缺失（理论上不会，种子表内）时退化为裸按钮，功能不受影响。
+      //
+      // 属性刻意保持与侧栏底部「设置」按钮一致（见
+      // dsh-client-ui-settings-general 的 SettingsRoot）：
+      //   只传 label / shortcutKeys，其余全用组件默认值
+      //   （side='right'、delayMs=0 立即显示）。
+      // ⚠️ 曾自作主张传 delayMs:500（以为「官方都这么写」——那是侧栏
+      //    header 等其它位置，与底部这一行无关），结果提示比「设置」
+      //    明显迟钝（用户反馈）。不要照搬其它位置的参数。
       var anchored =
         typeof Tooltip === 'function'
-          ? h(
-              Tooltip,
-              {
-                label: label,
-                shortcutKeys: keys.length > 0 ? keys : undefined,
-                side: 'right',
-                // 与官方按钮一致：悬停延迟 500ms，避免扫过时误弹。
-                delayMs: 500,
-              },
-              button,
-            )
+          ? h(Tooltip, { label: label, shortcutKeys: keys.length > 0 ? keys : undefined }, button)
           : button;
 
       return h('div', { className: 'dlk-foot-row' }, anchored);
