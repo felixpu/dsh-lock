@@ -1,5 +1,6 @@
 {
   "meta": {
+    "title": "Password lock",
     "description": "Shows a password screen when DSH opens and requires unlocking before use; supports manual and automatic locking, with the password stored as a one-way scrypt hash."
   }
 }
