@@ -211,10 +211,115 @@ window.__ModuleLoader__.load({
     var KEYCAP_SHIFT = IS_MAC ? '\u21E7' : 'Shift';
     /** 末位键：linux 用 ⌘⇧.（字母键在 linux 被平台拒绝），其余用 ⇧⌘L。 */
     var KEYCAP_LAST = IS_LINUX ? '.' : 'L';
-    /** 用于按钮 title / aria 的快捷键描述文本（如 "⇧⌘L"）。 */
+    /**
+     * 按钮 title / aria 用的快捷键描述文本（如 "⇧⌘L"）。
+     * 这是**回退值** —— 真实键帽优先从平台 catalog 读取（见 useShortcutKeys），
+     * 只有取不到时才用它。
+     */
     var SHORTCUT_TEXT = IS_MAC
       ? KEYCAP_SHIFT + KEYCAP_PRIMARY + KEYCAP_LAST
       : KEYCAP_PRIMARY + '+' + KEYCAP_SHIFT + '+' + KEYCAP_LAST;
+
+    /** 本插件注册的快捷键命令 id（必须与下方 register 的 id 一致）。 */
+    var SHORTCUT_ID = 'dsh-lock.lock';
+
+    // ---------------------------------------------------------------------
+    // 实时键帽：从平台 catalog 读取，而非用上面写死的常量。
+    //
+    // 为什么必须这样（实测问题）：
+    //   用户可在「设置 → 通用 → 快捷键」里改键位。写死的键帽不会跟着变，
+    //   侧栏按钮就会显示**与实际绑定不符**的提示 —— 比不显示更糟。
+    //
+    // 契约来源：dsh-client-shortcuts 的 `ShortcutRegistry.catalog`（SnapshotStore）：
+    //   `getSnapshot()` → ShortcutCatalogEntry[]，每行的 `keys` 是平台**已按
+    //   当前平台 + 用户改键格式化好的键帽数组**（如 ['⇧','⌘','L']；未绑定为 []）；
+    //   `subscribe()` 在绑定变化时回调。行内另有 aria/modified/conflicts/issue。
+    //
+    // 状态放模块级（非组件内）：侧栏按钮与锁屏都可能用；订阅属 apply 生命周期。
+    var shortcutKeys = null; // string[] | null；null = 尚未取到 → 用回退值
+    var shortcutSubscribers = new Set();
+
+    function setShortcutKeys(next) {
+      shortcutKeys = next;
+      shortcutSubscribers.forEach(function (fn) {
+        try {
+          fn();
+        } catch (err) {
+          /* 单个订阅者异常不影响其他 */
+        }
+      });
+    }
+
+    function subscribeShortcutKeys(fn) {
+      shortcutSubscribers.add(fn);
+      return function () {
+        shortcutSubscribers.delete(fn);
+      };
+    }
+
+    /** 组件用：当前应显示的键帽数组（取不到时回退写死常量）。 */
+    function useShortcutKeys() {
+      var pair = React.useState(shortcutKeys);
+      React.useEffect(function () {
+        // 订阅后立即同步一次，避免「订阅前已更新」造成的空窗。
+        pair[1](shortcutKeys);
+        return subscribeShortcutKeys(function () {
+          pair[1](shortcutKeys);
+        });
+      }, []);
+      return pair[0];
+    }
+
+    /** 回退键帽（平台 catalog 不可用时）。 */
+    function fallbackKeys() {
+      return [KEYCAP_SHIFT, KEYCAP_PRIMARY, KEYCAP_LAST];
+    }
+
+    /**
+     * 从平台 catalog 取出本命令的键帽并订阅其变化。
+     * 任何失败都只退回写死常量，绝不影响插件本体。
+     */
+    function watchShortcutKeys(ctx) {
+      try {
+        var sc = ctx && ctx.shortcuts;
+        var catalog = sc && sc.catalog;
+        if (!catalog || typeof catalog.getSnapshot !== 'function') return;
+
+        var read = function () {
+          try {
+            var rows = catalog.getSnapshot() || [];
+            for (var i = 0; i < rows.length; i++) {
+              var row = rows[i];
+              if (row && row.id === SHORTCUT_ID) {
+                // keys 为 [] 表示该命令当前无绑定（用户清除了键位）——
+                // 这也是实况，应如实反映，不能回退成假键帽。
+                setShortcutKeys(Array.isArray(row.keys) ? row.keys.slice() : []);
+                return;
+              }
+            }
+            setShortcutKeys([]);
+          } catch (err) {
+            /* 读取失败：保持原值 */
+          }
+        };
+
+        read();
+        if (typeof catalog.subscribe === 'function') {
+          var dispose = catalog.subscribe(read);
+          ctx.effect(function () {
+            return function () {
+              try {
+                if (typeof dispose === 'function') dispose();
+              } catch (err) {
+                /* 清理失败不影响卸载 */
+              }
+            };
+          }, 'dsh-lock: shortcut keys subscription');
+        }
+      } catch (err) {
+        /* 服务形态不符：退回写死常量 */
+      }
+    }
 
     // ---------------------------------------------------------------------
     // 插件 ctx 的模块级引用（apply 时赋值）。
@@ -780,6 +885,8 @@ window.__ModuleLoader__.load({
     function LockButton(props) {
       var t = props.t;
       var snapshot = useLockState();
+      // ⚠️ hook 必须在任何提前 return 之前调用（Hooks 规则：调用顺序须稳定）。
+      var liveKeys = useShortcutKeys();
       var wide = props && props.wide !== false;
       // 已解锁（或刚跳过引导）才显示；锁定态下遮罩已盖住侧栏，按钮不可见。
       if (snapshot.locked) return null;
@@ -809,17 +916,24 @@ window.__ModuleLoader__.load({
         // 快捷键键帽提示：kbd 元素 + 官方 ShortcutKeys 的 plain 样式
         // （实测规范：dsh-client-ui-primitives/lib/ShortcutKeys.module.css
         //   .keys → gap:3px; color:var(--dsw-alias-label-tertiary);
-        //           font-size:12px; line-height:16px; 且 plain 变体无底色）。
-        // 键帽按平台呈现，与注册的键位保持一致（见 KEYCAP_* 常量）。
-        children.push(
-          h(
-            'span',
-            { key: 'keys', className: 'dlk-keys', 'aria-hidden': 'true' },
-            h('kbd', { key: 'shift', className: 'dlk-key' }, KEYCAP_SHIFT),
-            h('kbd', { key: 'primary', className: 'dlk-key' }, KEYCAP_PRIMARY),
-            h('kbd', { key: 'last', className: 'dlk-key' }, KEYCAP_LAST),
-          ),
-        );
+        //           font-size:12px; line-height:16px；plain 变体无底色）。
+        //
+        // 键帽取自平台 catalog（useShortcutKeys），**不是写死的常量** ——
+        // 用户在「设置 → 通用 → 快捷键」改键位后这里会跟着变，与「设置」
+        // 那一行行为一致。取不到时才回退到 fallbackKeys()。
+        // 空数组 = 该命令当前无绑定（用户清除了键位）→ 不显示假提示。
+        var keys = liveKeys === null ? fallbackKeys() : liveKeys;
+        if (keys.length > 0) {
+          children.push(
+            h(
+              'span',
+              { key: 'keys', className: 'dlk-keys', 'aria-hidden': 'true' },
+              keys.map(function (k, i) {
+                return h('kbd', { key: 'k' + i, className: 'dlk-key' }, k);
+              }),
+            ),
+          );
+        }
       }
 
       return h(
@@ -1190,6 +1304,10 @@ window.__ModuleLoader__.load({
         } catch (err) {
           // 键位或服务任何问题：只失去快捷键，插件本体照常工作。
         }
+
+        // 订阅平台 catalog，让侧栏键帽跟随用户改键实时变化。
+        // 放在注册之后：确保本命令已进入 catalog。
+        watchShortcutKeys(ctx);
 
         // 活动监听 → 重置空闲计时（自动锁定）。
         ctx.effect(function () {
