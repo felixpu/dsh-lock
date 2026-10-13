@@ -1243,14 +1243,50 @@ window.__ModuleLoader__.load({
           );
         });
 
-        // 自动锁定设置：插件详情页直接显示（key = 包名）。
-        // 用 plugins.bundle.config 而非 plugins.row.config —— 后者需要再点一次
-        // 组件的「配置」才进入，前者点进插件页即可见。
-        ctx.slots.inject('plugins.bundle.config', function () {
-          return ctx.slots.register(
-            { name: 'plugins.bundle.config', key: 'dsh-lock', locale: NS },
-            AutoLockSetting,
-          );
+        // ---------------------------------------------------------------------
+        // 自动锁定设置 —— 挂在「本插件所在一行」的配置槽 `plugins.row.config`。
+        //
+        // 官方契约（dsh-cordis-client-runner 的槽位文档原文）：
+        //   `plugins.row.config` = "The configuration of **one row a bundle
+        //   declares**, keyed by `<package name>#<row id>` … the row on the
+        //   bundle's page gains a configure control that opens the entry's page".
+        //   即：点插件页里那一行 → 进入本插件的配置页。**每个行各占一个 key**。
+        //
+        // 为什么不用 `plugins.bundle.config`（曾经用过，聚合后失效）：
+        //   它的 key 是**所在 bundle 的包名**，且官方定义为 "a bundle's **own**
+        //   configuration" —— 一个 bundle 只承载**一份**配置。
+        //   独立安装时 bundle 就是我 → key 'dsh-lock' 可用；
+        //   但装进聚合包后 bundle 变成 dsh-suite，该 key 归聚合包所有，
+        //   而我们 5 个插件若都去抢 'dsh-suite' 这一个 key，
+        //   平台的 keyed 槽用 `find` 只取第一个 → **只有一个插件的配置能显示**。
+        //   （这个冲突已实测复现，不是推断。）
+        //   行级槽按 `包名#行id` 分派，天然一插件一格，聚合后依然精确命中。
+        //
+        // ⚠️ 注册两个 key：行 id 由 patch 决定，两种装法不同 ——
+        //   · 独立安装：本仓库 cordis.patch.yml 的 `id: lock`
+        //     ⇒ `dsh-lock#lock`
+        //   · 装进聚合包 dsh-suite：那份 patch 的 `id: dsh-suite-lock`
+        //     ⇒ `dsh-suite#dsh-suite-lock`
+        //   两个都注册才能在两种装法下都显示配置。
+        //   代价：若哪天改动任一份 patch 的行 id，必须同步改这里（注释已写明）。
+        // ---------------------------------------------------------------------
+        var ROW_CONFIG_KEYS = ['dsh-lock#lock', 'dsh-suite#dsh-suite-lock'];
+        ctx.slots.inject('plugins.row.config', function () {
+          var disposers = ROW_CONFIG_KEYS.map(function (rowKey) {
+            return ctx.slots.register(
+              { name: 'plugins.row.config', key: rowKey, locale: NS },
+              AutoLockSetting,
+            );
+          });
+          return function () {
+            disposers.forEach(function (dispose) {
+              try {
+                if (typeof dispose === 'function') dispose();
+              } catch (err) {
+                /* 卸载期异常不影响插件卸载 */
+              }
+            });
+          };
         });
 
         // ---------------------------------------------------------------------
