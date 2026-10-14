@@ -1262,15 +1262,24 @@ window.__ModuleLoader__.load({
         //   （这个冲突已实测复现，不是推断。）
         //   行级槽按 `包名#行id` 分派，天然一插件一格，聚合后依然精确命中。
         //
-        // ⚠️ 注册两个 key：行 id 由 patch 决定，两种装法不同 ——
-        //   · 独立安装：本仓库 cordis.patch.yml 的 `id: lock`
-        //     ⇒ `dsh-lock#lock`
-        //   · 装进聚合包 dsh-suite：那份 patch 的 `id: dsh-suite-lock`
-        //     ⇒ `dsh-suite#dsh-suite-lock`
-        //   两个都注册才能在两种装法下都显示配置。
-        //   代价：若哪天改动任一份 patch 的行 id，必须同步改这里（注释已写明）。
+        // ⚠️ 注册三个 key（**保留旧值**，不是冗余）：
+        //   · 独立安装：本仓库 cordis.patch.yml 的 `id: lock` ⇒ `dsh-lock#lock`
+        //   · 装进聚合包 dsh-plugin-suite：那份 patch 的 `id: dsh-suite-lock`
+        //     ⇒ `dsh-plugin-suite#dsh-suite-lock`
+        //   · 旧的 `dsh-suite#…`：聚合包最初叫 dsh-suite，后因该 npm 包名被他人
+        //     占用而改名 dsh-plugin-suite。若有人仍按旧包名安装，这一条仍可用。
+        //
+        // ⚠️ 踩过的坑（务必记住）：平台的 key 是 `聚合包【当前包名】#行id`
+        //   （rowConfigKey(bundle, rowId)，bundle = pkg.name）。
+        //   我上次给聚合包改名时**只改了 pack、漏改了这里**，结果插件标题上的
+        //   「>」入口整片消失 —— 且**没有任何报错**（静默不渲染）。
+        //   ⇒ 以后凡是改聚合包的**包名**或**行 id**，必须同步改这里。
         // ---------------------------------------------------------------------
-        var ROW_CONFIG_KEYS = ['dsh-lock#lock', 'dsh-suite#dsh-suite-lock'];
+        var ROW_CONFIG_KEYS = [
+          'dsh-lock#lock',
+          'dsh-plugin-suite#dsh-suite-lock',
+          'dsh-suite#dsh-suite-lock',
+        ];
         ctx.slots.inject('plugins.row.config', function () {
           var disposers = ROW_CONFIG_KEYS.map(function (rowKey) {
             return ctx.slots.register(
